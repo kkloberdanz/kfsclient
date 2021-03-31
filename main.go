@@ -24,9 +24,21 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
+
+func hash_file(filename string) (string, error) {
+	output, err := exec.Command("b2sum", filename).Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to hash '%s': %s", filename, err)
+	}
+
+	output_str := string(output)
+	hash := strings.Fields(output_str)[0]
+	return hash, nil
+}
 
 func upload(client *http.Client, url string, values map[string]io.Reader) (err error) {
 	// Prepare a form that you will submit to that URL.
@@ -86,14 +98,7 @@ func upload(client *http.Client, url string, values map[string]io.Reader) (err e
 	return nil
 }
 
-func main() {
-	nargs := len(os.Args)
-	if nargs != 3 {
-		panic(fmt.Sprintf("usage: %s SERVER FILENAME", os.Args[0]))
-	}
-	server := os.Args[1]
-	filename := os.Args[2]
-
+func do_upload(server string, filename string) error {
 	tr := &http.Transport{
 		MaxIdleConns:       10,
 		IdleConnTimeout:    30 * time.Second,
@@ -103,18 +108,58 @@ func main() {
 
 	r, err := os.Open(filename)
 	if err != nil {
-		panic(fmt.Sprintf("failed to open file: '%s'\n", filename))
+		return err
 	}
 	defer r.Close()
+
+	hash, err := hash_file(filename)
+	if err != nil {
+		return err
+	}
+
 	values := map[string]io.Reader{
 		"file": r,
-		"hash": strings.NewReader("xyz"),
+		"hash": strings.NewReader(hash),
 		"path": strings.NewReader(filename),
 	}
 
 	url := fmt.Sprintf("%s/upload", server)
 	err = upload(client, url, values)
+	return err
+}
+
+func check_exists(server string, filename string) (bool, error) {
+	url := fmt.Sprintf("%s/exists", server)
+	res, err := http.Get(url)
+	if err != nil {
+		return false, err
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, res.ContentLength))
+	_, err = buf.ReadFrom(res.Body)
+	if err != nil {
+		return false, err
+	}
+	body := buf.String()
+	return body == "no", nil
+}
+
+func main() {
+	nargs := len(os.Args)
+	if nargs != 3 {
+		panic(fmt.Sprintf("usage: %s SERVER FILENAME", os.Args[0]))
+	}
+	server := os.Args[1]
+	filename := os.Args[2]
+
+	exists, err := check_exists(server, filename)
 	if err != nil {
 		panic(err)
+	}
+
+	if !exists {
+		err := do_upload(server, filename)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
