@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -129,7 +130,11 @@ func do_upload(server string, filename string) error {
 }
 
 func check_exists(server string, filename string) (bool, error) {
-	url := fmt.Sprintf("%s/exists", server)
+	hash, err := hash_file(filename)
+	if err != nil {
+		return false, err
+	}
+	url := fmt.Sprintf("%s/exists/%s", server, hash)
 	res, err := http.Get(url)
 	if err != nil {
 		return false, err
@@ -140,7 +145,8 @@ func check_exists(server string, filename string) (bool, error) {
 		return false, err
 	}
 	body := buf.String()
-	return body == "no", nil
+	//fmt.Printf("body: %s\n", body)
+	return body == "yes", nil
 }
 
 func main() {
@@ -149,7 +155,10 @@ func main() {
 		panic(fmt.Sprintf("usage: %s SERVER FILENAME", os.Args[0]))
 	}
 	server := os.Args[1]
-	filename := os.Args[2]
+	filename, err := filepath.Abs(os.Args[2])
+	if err != nil {
+		panic(err)
+	}
 
 	exists, err := check_exists(server, filename)
 	if err != nil {
@@ -161,5 +170,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+	} else {
+		fmt.Printf("file already exists: '%s'\n", filename)
 	}
 }
