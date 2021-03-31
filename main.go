@@ -18,9 +18,103 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"strings"
+	"time"
 )
 
+func upload(client *http.Client, url string, values map[string]io.Reader) (err error) {
+	// Prepare a form that you will submit to that URL.
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	for key, r := range values {
+		var fw io.Writer
+		if x, ok := r.(io.Closer); ok {
+			defer x.Close()
+		}
+		// Add an image file
+		if x, ok := r.(*os.File); ok {
+			if fw, err = w.CreateFormFile(key, x.Name()); err != nil {
+				return err
+			}
+		} else {
+			// Add other fields
+			if fw, err = w.CreateFormField(key); err != nil {
+				return err
+			}
+		}
+		if _, err = io.Copy(fw, r); err != nil {
+			return err
+		}
+
+	}
+	// Don't forget to close the multipart writer.
+	// If you don't close it, your request will be missing the terminating boundary.
+	w.Close()
+
+	// Now that you have a form, you can submit it to your handler.
+	req, err := http.NewRequest("POST", url, &b)
+	if err != nil {
+		return err
+	}
+	// Don't forget to set the content type, this will contain the boundary.
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	// Submit the request
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	buf := bytes.NewBuffer(make([]byte, 0, res.ContentLength))
+	_, err = buf.ReadFrom(res.Body)
+	if err != nil {
+		return err
+	}
+	body := buf.Bytes()
+
+	fmt.Printf("status: %s: %s\n", res.Status, body)
+	// Check the response
+	if res.StatusCode != http.StatusOK {
+		err = fmt.Errorf("bad status: %s", res.Status)
+	}
+	return nil
+}
+
 func main() {
-	fmt.Println("hello world!")
+	nargs := len(os.Args)
+	if nargs != 3 {
+		panic(fmt.Sprintf("usage: %s SERVER FILENAME", os.Args[0]))
+	}
+	server := os.Args[1]
+	filename := os.Args[2]
+
+	tr := &http.Transport{
+		MaxIdleConns:       10,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: true,
+	}
+	client := &http.Client{Transport: tr}
+
+	r, err := os.Open(filename)
+	if err != nil {
+		panic(fmt.Sprintf("failed to open file: '%s'\n", filename))
+	}
+	defer r.Close()
+	values := map[string]io.Reader{
+		"file": r,
+		"hash": strings.NewReader("xyz"),
+		"path": strings.NewReader(filename),
+	}
+
+	url := fmt.Sprintf("%s/upload", server)
+	err = upload(client, url, values)
+	if err != nil {
+		panic(err)
+	}
 }
